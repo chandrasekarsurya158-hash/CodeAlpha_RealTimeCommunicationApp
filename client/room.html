@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meeting Room - OmniConnect</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📹</text></svg>">
+</head>
+<body>
+  <div class="room-wrapper">
+    <!-- Top Room Header -->
+    <header class="room-header">
+      <div class="header-left">
+        <div class="room-title-tag">
+          <span style="font-size: 1.1rem;">📹</span>
+          <span>OmniConnect</span>
+        </div>
+        <div class="room-id-pill">
+          <span>Room:</span>
+          <span id="roomIdDisplay" style="font-weight: 700;">loading...</span>
+          <button id="btnCopyRoomId" class="copy-btn" title="Copy Room ID">📋</button>
+        </div>
+        <button id="btnCopyInviteLink" class="btn btn-outline" style="padding: 4px 10px; font-size: 0.8rem;">
+          🔗 Copy Invite
+        </button>
+      </div>
+
+      <div class="header-center">
+        <div class="call-timer" id="callTimer">00:00</div>
+      </div>
+
+      <div class="header-right">
+        <div class="badge badge-primary" id="participantCountPill">1 person</div>
+      </div>
+    </header>
+
+    <!-- Main Room Body -->
+    <main class="room-body">
+      <!-- Video Grid Container -->
+      <section class="video-grid-container">
+        <div class="video-grid" id="videoGrid" data-count="1">
+          <!-- Local Video Tile -->
+          <div class="video-card local" id="localVideoCard">
+            <video id="localVideo" autoplay playsinline muted></video>
+            <div class="avatar-fallback" id="localAvatarFallback">
+              <div class="avatar-circle" id="localAvatarInitial">Y</div>
+              <span style="font-size: 0.9rem; font-weight: 600;">You</span>
+            </div>
+            <div class="screen-share-badge" id="localScreenBadge" style="display: none;">🖥️ Presenting Screen</div>
+            <div class="video-meta">
+              <div class="user-name-badge">
+                <span id="localUserNameTag">You</span>
+              </div>
+              <div class="mic-badge" id="localMicBadge">🎤</div>
+            </div>
+          </div>
+          <!-- Remote video cards will be appended dynamically here -->
+        </div>
+      </section>
+
+      <!-- Collaborative Whiteboard Modal / Canvas View -->
+      <section class="whiteboard-overlay" id="whiteboardOverlay">
+        <div class="whiteboard-toolbar">
+          <div class="wb-tool-group">
+            <span style="font-weight: 700; font-size: 0.95rem; margin-right: 8px;">🎨 Whiteboard</span>
+            <button type="button" class="wb-tool-btn active" id="wbToolPen">✏️ Pen</button>
+            <button type="button" class="wb-tool-btn" id="wbToolEraser">🧹 Eraser</button>
+            <input type="color" id="wbColorPicker" class="color-picker-input" value="#1e293b" title="Stroke Color">
+            <label style="font-size: 0.8rem; color: var(--text-secondary); margin-left: 6px;">Size:</label>
+            <input type="range" id="wbBrushSlider" class="brush-size-slider" min="1" max="25" value="3">
+          </div>
+          <div class="wb-tool-group">
+            <button type="button" class="btn btn-secondary" id="wbBtnDownload" style="padding: 6px 12px; font-size: 0.85rem;">📥 Save</button>
+            <button type="button" class="btn btn-outline" id="wbBtnClear" style="padding: 6px 12px; font-size: 0.85rem; color:#f87171;">🗑️ Clear All</button>
+            <button type="button" class="btn btn-secondary" id="btnCloseWhiteboard" style="padding: 6px 12px; font-size: 0.85rem;">✕ Close</button>
+          </div>
+        </div>
+        <div class="whiteboard-canvas-container">
+          <canvas id="whiteboardCanvas"></canvas>
+        </div>
+      </section>
+
+      <!-- Collapsible Side Drawer (Chat, Files, Participants) -->
+      <aside class="side-drawer collapsed" id="sideDrawer">
+        <div class="drawer-header">
+          <div class="drawer-tabs">
+            <button type="button" class="drawer-tab-btn active" data-target="tabChat">Chat</button>
+            <button type="button" class="drawer-tab-btn" data-target="tabFiles">Files</button>
+            <button type="button" class="drawer-tab-btn" data-target="tabParticipants">People</button>
+          </div>
+          <button type="button" class="close-drawer-btn" id="btnCloseDrawer" title="Close Panel">✕</button>
+        </div>
+
+        <div class="drawer-content">
+          <!-- Chat Pane -->
+          <div class="tab-pane active" id="tabChat">
+            <div class="chat-messages" id="chatMessages">
+              <!-- Chat messages appended dynamically -->
+            </div>
+            <div class="chat-input-box">
+              <input type="text" id="chatInput" placeholder="Send a message to everyone..." autocomplete="off">
+              <button id="btnSendChat" class="btn btn-primary" style="padding: 8px 14px;">Send</button>
+            </div>
+          </div>
+
+          <!-- Files Pane -->
+          <div class="tab-pane" id="tabFiles">
+            <div class="files-pane">
+              <!-- File Drag & Drop Zone -->
+              <div class="file-upload-dropzone" id="fileDropzone">
+                <div class="file-upload-icon">📁</div>
+                <div style="font-weight: 600; font-size: 0.9rem; margin-bottom: 4px;">Click or Drag files to share</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary);">Supports PDF, images, docs up to 50MB</div>
+                <input type="file" id="fileInput" style="display: none;">
+              </div>
+
+              <!-- Shared Files List -->
+              <div style="font-size: 0.85rem; font-weight: 700; color: var(--text-secondary);">Files in this Call</div>
+              <div class="files-list-container" id="filesListContainer">
+                <!-- Shared file item cards appended dynamically -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Participants Pane -->
+          <div class="tab-pane" id="tabParticipants">
+            <div class="participants-list" id="participantsList">
+              <!-- Participant items appended dynamically -->
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Bottom Controls Dock -->
+    <footer class="room-footer">
+      <div class="controls-cluster">
+        <!-- Mic Toggle -->
+        <button type="button" class="control-btn" id="btnToggleMic" title="Mute Microphone">
+          <span class="icon">🎤</span>
+        </button>
+
+        <!-- Camera Toggle -->
+        <button type="button" class="control-btn" id="btnToggleCam" title="Turn Off Camera">
+          <span class="icon">📹</span>
+        </button>
+
+        <!-- Screen Share -->
+        <button type="button" class="control-btn" id="btnToggleScreen" title="Share Screen">
+          <span class="icon">🖥️</span>
+        </button>
+
+        <!-- Whiteboard Toggle -->
+        <button type="button" class="control-btn" id="btnToggleWhiteboard" title="Collaborative Whiteboard">
+          <span class="icon">🎨</span>
+        </button>
+
+        <!-- Chat / Files / Panel Toggle -->
+        <button type="button" class="control-btn" id="btnToggleChat" title="Chat & Files">
+          <span class="icon">💬</span>
+          <span class="notification-badge" id="chatBadge">0</span>
+        </button>
+
+        <!-- End Call Button -->
+        <button type="button" class="control-btn btn-leave" id="btnLeaveRoom" title="Leave Call">
+          <span>📞</span>
+          <span>Leave</span>
+        </button>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Global Toast Notifications -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Socket.io client script (served automatically by Socket.io) -->
+  <script src="/socket.io/socket.io.js"></script>
+
+  <!-- Modular Client Scripts -->
+  <script src="/js/api.js"></script>
+  <script src="/js/webrtc.js"></script>
+  <script src="/js/whiteboard.js"></script>
+  <script src="/js/chat.js"></script>
+  <script src="/js/room.js"></script>
+</body>
+</html>

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OmniConnect - Real-Time Video & Collaboration</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📹</text></svg>">
+</head>
+<body>
+  <div class="lobby-container">
+    <!-- Navbar -->
+    <header class="navbar">
+      <div class="nav-brand">
+        <div class="brand-icon">📹</div>
+        <span>OmniConnect</span>
+      </div>
+
+      <div class="user-profile" id="userProfileNav" style="display: none;">
+        <div class="user-avatar-badge" id="userAvatarInitial">U</div>
+        <span id="userNameDisplay" style="font-weight: 600;">User</span>
+        <button id="logoutBtn" class="btn btn-outline" style="padding: 6px 12px; font-size: 0.85rem;">Sign Out</button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="lobby-main">
+      <!-- 1. Authentication Section (Shown when logged out and no room invite) -->
+      <section class="auth-card" id="authSection">
+        <h1 class="card-title">Welcome</h1>
+        <p class="card-subtitle">Connect, collaborate, and share with real-time video</p>
+
+        <div class="auth-tabs">
+          <button type="button" class="tab-btn active" id="tabLogin">Sign In</button>
+          <button type="button" class="tab-btn" id="tabRegister">Create Account</button>
+        </div>
+
+        <div id="authError" class="error-message"></div>
+        <div id="authSuccess" class="success-message"></div>
+
+        <!-- Login Form -->
+        <form id="loginForm">
+          <div class="form-group">
+            <label for="loginEmail">Email Address</label>
+            <input type="email" id="loginEmail" placeholder="you@example.com" required autocomplete="email">
+          </div>
+          <div class="form-group">
+            <label for="loginPassword">Password</label>
+            <input type="password" id="loginPassword" placeholder="••••••••" required autocomplete="current-password">
+          </div>
+          <button type="submit" class="btn btn-primary" style="width: 100%;">Sign In</button>
+        </form>
+
+        <!-- Register Form -->
+        <form id="registerForm" style="display: none;">
+          <div class="form-group">
+            <label for="regName">Full Name</label>
+            <input type="text" id="regName" placeholder="Alex Johnson" required autocomplete="name">
+          </div>
+          <div class="form-group">
+            <label for="regEmail">Email Address</label>
+            <input type="email" id="regEmail" placeholder="you@example.com" required autocomplete="email">
+          </div>
+          <div class="form-group">
+            <label for="regPassword">Password (6+ chars)</label>
+            <input type="password" id="regPassword" placeholder="••••••••" required minlength="6" autocomplete="new-password">
+          </div>
+          <button type="submit" class="btn btn-success" style="width: 100%;">Create Free Account</button>
+        </form>
+      </section>
+
+      <!-- 2. Dashboard Section (Shown when logged in with no room invite) -->
+      <section class="dashboard-card" id="dashboardSection" style="display: none;">
+        <h1 class="card-title">Start or Join a Meeting</h1>
+        <p class="card-subtitle">Secure HD video calls, collaborative whiteboard &amp; file sharing</p>
+
+        <!-- Camera & Mic Self-Check Preview -->
+        <div class="device-preview-box">
+          <video id="previewVideo" autoplay playsinline muted></video>
+          <div class="preview-controls">
+            <button type="button" id="previewToggleMic" class="preview-btn" title="Toggle Microphone">🎤</button>
+            <button type="button" id="previewToggleCam" class="preview-btn" title="Toggle Camera">📹</button>
+          </div>
+        </div>
+
+        <button id="btnCreateRoom" class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 1rem; margin-bottom: 16px;">
+          <span>⚡</span> Start Instant Meeting
+        </button>
+
+        <div class="divider">or enter room code</div>
+
+        <div class="join-group">
+          <input type="text" id="joinRoomInput" placeholder="e.g. meet-123-abc" autocomplete="off">
+          <button id="btnJoinRoom" class="btn btn-secondary">Join</button>
+        </div>
+      </section>
+
+      <!-- 3. Direct Room Invite Landing Section (Google Meet / Zoom style) -->
+      <section class="dashboard-card" id="inviteSection" style="display: none;">
+        <div style="display: flex; justify-content: center; margin-bottom: 12px;">
+          <span class="badge badge-primary" style="font-size: 0.85rem; padding: 6px 14px;">
+            Meeting Code: <strong id="inviteRoomIdBadge" style="margin-left: 4px; font-family: monospace;">...</strong>
+          </span>
+        </div>
+        <h1 class="card-title">Ready to join?</h1>
+        <p class="card-subtitle">Check your audio &amp; video before entering</p>
+
+        <!-- Camera & Mic Self-Check Preview for Invite -->
+        <div class="device-preview-box">
+          <video id="invitePreviewVideo" autoplay playsinline muted></video>
+          <div class="preview-controls">
+            <button type="button" id="inviteToggleMic" class="preview-btn" title="Toggle Microphone">🎤</button>
+            <button type="button" id="inviteToggleCam" class="preview-btn" title="Toggle Camera">📹</button>
+          </div>
+        </div>
+
+        <!-- Option A: User is already logged in -->
+        <div id="inviteLoggedInBox" style="display: none; text-align: center;">
+          <div style="font-size: 0.95rem; margin-bottom: 14px; color: var(--text-secondary);">
+            Joining as <strong id="inviteLoggedInName" style="color: var(--text-primary); font-size: 1.05rem;">...</strong>
+          </div>
+          <button id="btnInviteJoinLoggedIn" class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 1rem;">
+            <span>⚡</span> Join Now
+          </button>
+          <div style="margin-top: 14px;">
+            <button id="btnInviteSwitchAccount" class="btn btn-outline" style="font-size: 0.8rem; padding: 4px 10px;">Switch Account</button>
+          </div>
+        </div>
+
+        <!-- Option B: User is not logged in - Guest join Google Meet style -->
+        <div id="inviteGuestBox" style="display: none;">
+          <div class="form-group">
+            <label for="inviteGuestName">What's your name?</label>
+            <input type="text" id="inviteGuestName" placeholder="Enter your display name (e.g. Sarah)" autocomplete="name">
+          </div>
+          <button id="btnInviteJoinGuest" class="btn btn-success" style="width: 100%; padding: 12px; font-size: 1rem; margin-bottom: 14px;">
+            <span>⚡</span> Join Meeting
+          </button>
+          <div style="text-align: center;">
+            <button id="btnInviteGoToLogin" class="btn btn-outline" style="font-size: 0.82rem; padding: 6px 12px;">
+              Have an account? Sign In
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/auth.js"></script>
+</body>
+</html>
