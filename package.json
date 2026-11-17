@@ -1,0 +1,14 @@
+{
+  "name": "realtime-conferencing-app",
+  "version": "1.0.0",
+  "description": "Full-Featured Real-Time Video Conferencing, Whiteboard, and Collaboration App",
+  "scripts": {
+    "install:server": "cd server && npm install",
+    "postinstall": "npm run install:server",
+    "start": "cd server && node server.js",
+    "dev": "cd server && node --watch server.js"
+  },
+  "keywords": ["webrtc", "socket.io", "video-conference", "whiteboard", "screen-sharing", "file-sharing"],
+  "author": "Antigravity",
+  "license": "MIT"
+}
