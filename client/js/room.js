@@ -84,16 +84,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 6. Initialize WebRTC Mesh Manager
   const participantsList = document.getElementById('participantsList');
   const participantCountPill = document.getElementById('participantCountPill');
+  const localRolePill = document.getElementById('localRolePill');
+
+  const updateLocalRoleUI = () => {
+    if (localRolePill) {
+      if (currentUser.isHost) {
+        localRolePill.textContent = '👑 You (Host)';
+        localRolePill.className = 'status-pill connected';
+        localRolePill.style.background = 'linear-gradient(135deg, #f59e0b, #d97706)';
+      } else {
+        localRolePill.textContent = 'You (Member)';
+        localRolePill.className = 'status-pill connected';
+        localRolePill.style.background = 'rgba(59, 130, 246, 0.85)';
+      }
+    }
+  };
 
   const onParticipantChange = (count, peerProfiles) => {
     if (participantCountPill) {
       participantCountPill.textContent = `${count} ${count === 1 ? 'person' : 'people'}`;
     }
 
+    updateLocalRoleUI();
+
     if (participantsList) {
       participantsList.innerHTML = '';
 
-      // Add self
+      // Add self with Host or Member badge
       const selfItem = document.createElement('div');
       selfItem.className = 'participant-item';
       selfItem.innerHTML = `
@@ -105,15 +122,16 @@ document.addEventListener('DOMContentLoaded', async () => {
           </div>
         </div>
         <div class="part-badges">
-          <span class="badge badge-primary">Host</span>
+          <span class="badge ${currentUser.isHost ? 'badge-host' : 'badge-member'}">${currentUser.isHost ? '👑 Host' : 'Member'}</span>
         </div>
       `;
       participantsList.appendChild(selfItem);
 
-      // Add other peers
+      // Add other peers with their respective Host or Member badge
       for (const socketId in peerProfiles) {
         const peer = peerProfiles[socketId];
         const peerShortId = shortId(peer.id || socketId);
+        const isPeerHost = Boolean(peer.isHost);
         const peerItem = document.createElement('div');
         peerItem.className = 'participant-item';
         peerItem.innerHTML = `
@@ -125,7 +143,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             </div>
           </div>
           <div class="part-badges">
-            <span class="badge badge-success">Participant</span>
+            <span class="badge ${isPeerHost ? 'badge-host' : 'badge-member'}">${isPeerHost ? '👑 Host' : 'Member'}</span>
           </div>
         `;
         participantsList.appendChild(peerItem);
@@ -150,6 +168,30 @@ document.addEventListener('DOMContentLoaded', async () => {
   socket.emit('join-room', {
     roomId,
     user: currentUser
+  });
+
+  // Server assigns role: First user is Host, subsequent joiners are Members
+  socket.on('room-joined', ({ isHost, role, selfUser }) => {
+    currentUser.isHost = isHost;
+    currentUser.role = role;
+    if (webrtc) webrtc.currentUser.isHost = isHost;
+    updateLocalRoleUI();
+    if (webrtc) webrtc.updateParticipantCount();
+  });
+
+  // When Host leaves and server promotes next member to Host
+  socket.on('host-changed', ({ newHostSocketId, newHostUser }) => {
+    if (newHostUser && newHostUser.id === currentUser.id) {
+      currentUser.isHost = true;
+      currentUser.role = 'Host';
+      if (webrtc) webrtc.currentUser.isHost = true;
+      window.showToast('👑 You are now the Host of this meeting!');
+    } else if (webrtc && webrtc.peerProfiles[newHostSocketId]) {
+      webrtc.peerProfiles[newHostSocketId].isHost = true;
+      window.showToast(`👑 ${newHostUser.name} is now the Host.`);
+    }
+    updateLocalRoleUI();
+    if (webrtc) webrtc.updateParticipantCount();
   });
 
   // 7. Initialize Collaborative Whiteboard

@@ -1,9 +1,9 @@
-// WebRTC Peer-to-Peer Mesh Manager with Open-Relay TURN Fallback, Robust Screen Share & Audio Engine
+// WebRTC Peer-to-Peer Mesh Manager with Open-Relay TURN Fallback, Fullscreen Presentation Spotlight & Host Roles
 class WebRTCManager {
   constructor({ socket, roomId, currentUser, onParticipantChange }) {
     this.socket = socket;
     this.roomId = roomId;
-    this.currentUser = currentUser || { id: 'user_' + Date.now(), name: 'Guest' };
+    this.currentUser = currentUser || { id: 'user_' + Date.now(), name: 'Guest', isHost: false };
     this.onParticipantChange = onParticipantChange;
 
     this.localStream = null;
@@ -46,7 +46,6 @@ class WebRTCManager {
       iceCandidatePoolSize: 10
     };
 
-    // Unlock audio on any user interaction for browser autoplay compliance
     this.setupAutoplayUnlock();
   }
 
@@ -74,9 +73,8 @@ class WebRTCManager {
     }
   }
 
-  // 1. Initialize Local Media Stream with Multi-Tier Fallbacks (Resolves Laptop Camera/Mic Conflicts)
+  // 1. Initialize Local Media Stream with Multi-Tier Fallbacks
   async initLocalStream() {
-    // Tier 1: Relaxed video + audio
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
         video: true,
@@ -84,20 +82,17 @@ class WebRTCManager {
       });
     } catch (err1) {
       console.warn('Standard video+audio failed, trying video only...', err1);
-      // Tier 2: Video only (mic unavailable or in use by another app like WhatsApp Web)
       try {
         const vidStream = await navigator.mediaDevices.getUserMedia({ video: true });
         const silentAudio = this.createSilentAudioTrack();
         this.localStream = new MediaStream([...vidStream.getVideoTracks(), silentAudio]);
       } catch (err2) {
         console.warn('Video failed, trying audio only...', err2);
-        // Tier 3: Audio only (webcam in use by another tab or laptop driver issue)
         try {
           const audStream = await navigator.mediaDevices.getUserMedia({ audio: true });
           const canvasVideo = this.createCanvasVideoTrack(this.currentUser.name);
           this.localStream = new MediaStream([...audStream.getAudioTracks(), canvasVideo]);
         } catch (err3) {
-          // Tier 4: Synthetic video & audio (permissions denied)
           console.warn('All hardware access denied, using synthetic stream...', err3);
           const canvasVideo = this.createCanvasVideoTrack(this.currentUser.name);
           const silentAudio = this.createSilentAudioTrack();
@@ -113,7 +108,7 @@ class WebRTCManager {
     const localVideo = document.getElementById('localVideo');
     if (localVideo) {
       localVideo.srcObject = this.localStream;
-      localVideo.muted = true; // Always mute self to avoid echo
+      localVideo.muted = true;
       localVideo.play().catch(() => {});
     }
 
@@ -126,7 +121,7 @@ class WebRTCManager {
     return this.localStream;
   }
 
-  // Generates a 25fps animated avatar video track from HTML5 Canvas
+  // Generates animated avatar video track from Canvas
   createCanvasVideoTrack(name) {
     const canvas = document.createElement('canvas');
     canvas.width = 640;
@@ -169,7 +164,6 @@ class WebRTCManager {
     return canvas.captureStream(25).getVideoTracks()[0];
   }
 
-  // Generates a silent Web Audio track
   createSilentAudioTrack() {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -204,7 +198,8 @@ class WebRTCManager {
       this.updateParticipantCount();
 
       if (window.showToast) {
-        window.showToast(`${user.name || 'A participant'} (ID: ${this.shortId(user.id)}) joined`);
+        const role = user.isHost ? 'Host 👑' : 'Member';
+        window.showToast(`${user.name || 'A participant'} (${role}) joined`);
       }
     });
 
@@ -224,7 +219,6 @@ class WebRTCManager {
           const desc = new RTCSessionDescription(signalData.sdp);
           await pc.setRemoteDescription(desc);
 
-          // Flush queued candidates
           if (this.iceQueues[from] && this.iceQueues[from].length > 0) {
             const queue = [...this.iceQueues[from]];
             this.iceQueues[from] = [];
@@ -270,7 +264,7 @@ class WebRTCManager {
       }
     });
 
-    // Peer media state update (muted, camera off, screenshare)
+    // Remote peer media state (muted, camera off, screen share)
     this.socket.on('peer-media-state', ({ socketId, isAudioMuted, isVideoOff, isScreenSharing }) => {
       const card = document.getElementById(`video-card-${socketId}`);
       if (card) {
@@ -283,15 +277,22 @@ class WebRTCManager {
             videoEl.classList.add('screen-sharing');
             videoEl.play().catch(() => {});
           }
-        } else if (isVideoOff) {
-          card.classList.remove('has-video');
-          card.classList.add('video-off');
+          // Put this card into the dedicated Presentation Fullscreen Spotlight stage!
+          this.setPresentationMode(`video-card-${socketId}`, true);
         } else {
-          card.classList.add('has-video');
-          card.classList.remove('video-off');
-          if (videoEl) {
-            videoEl.classList.remove('screen-sharing');
-            videoEl.play().catch(() => {});
+          // If this card was presenting, remove presentation stage mode
+          this.setPresentationMode(`video-card-${socketId}`, false);
+
+          if (isVideoOff) {
+            card.classList.remove('has-video');
+            card.classList.add('video-off');
+          } else {
+            card.classList.add('has-video');
+            card.classList.remove('video-off');
+            if (videoEl) {
+              videoEl.classList.remove('screen-sharing');
+              videoEl.play().catch(() => {});
+            }
           }
         }
 
@@ -309,6 +310,7 @@ class WebRTCManager {
     });
 
     this.socket.on('user-left', ({ socketId, user }) => {
+      this.setPresentationMode(`video-card-${socketId}`, false);
       this.removePeer(socketId);
       const name = user ? user.name : 'A participant';
       const uid = user ? this.shortId(user.id) : '';
@@ -361,7 +363,6 @@ class WebRTCManager {
       this.attachRemoteStream(peerSocketId, remoteStream);
     };
 
-    // Monitor ICE connection state & trigger automatic ICE restart if network changes
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === 'failed') {
         console.warn(`[ICE] Failed for ${peerSocketId}, attempting automatic restart...`);
@@ -371,7 +372,6 @@ class WebRTCManager {
       }
     };
 
-    // Track overall connection state
     pc.onconnectionstatechange = () => {
       const statusPill = document.querySelector(`#video-card-${peerSocketId} .status-pill`);
       if (statusPill) {
@@ -389,7 +389,6 @@ class WebRTCManager {
       }
     };
 
-    // If initiator, generate SDP offer
     if (isInitiator) {
       try {
         const offer = await pc.createOffer({
@@ -410,21 +409,24 @@ class WebRTCManager {
     return pc;
   }
 
-  // 4. Render or Update Remote Video Card Tile in Grid
+  // 4. Render or Update Remote Video Card Tile in Grid with Host vs Member Badge
   renderRemoteVideoCard(peerSocketId, user) {
     const videoGrid = document.getElementById('videoGrid');
     if (!videoGrid) return;
 
     let card = document.getElementById(`video-card-${peerSocketId}`);
-    const peerUser = user || this.peerProfiles[peerSocketId] || { name: 'Participant', id: peerSocketId };
+    const peerUser = user || this.peerProfiles[peerSocketId] || { name: 'Participant', id: peerSocketId, isHost: false };
     const name = peerUser.name || 'Participant';
     const userIdDisplay = this.shortId(peerUser.id || peerSocketId);
     const initial = name.charAt(0).toUpperCase();
+    const isHost = Boolean(peerUser.isHost);
+    const roleBadgeText = isHost ? '👑 Host' : 'Member';
+    const roleBadgeClass = isHost ? 'badge-host' : 'badge-member';
 
     if (!card) {
       card = document.createElement('div');
       card.id = `video-card-${peerSocketId}`;
-      card.className = 'video-card'; // Starts with avatar showing by default until frames arrive
+      card.className = 'video-card';
 
       card.innerHTML = `
         <video id="video-${peerSocketId}" autoplay playsinline></video>
@@ -435,11 +437,13 @@ class WebRTCManager {
         </div>
         <div class="screen-share-badge" style="display:none;">🖥️ Presenting Screen</div>
         <div class="connection-status-tag">
+          <span class="badge ${roleBadgeClass}" style="margin-right:4px;">${roleBadgeText}</span>
           <span class="status-pill connecting">Connecting...</span>
         </div>
         <div class="video-meta">
           <div class="user-name-badge">
             <span class="peer-name">${name}</span>
+            <span class="badge ${roleBadgeClass}" style="font-size:0.7rem; padding:1px 6px;">${roleBadgeText}</span>
             <span class="user-id-tag">ID: ${userIdDisplay}</span>
           </div>
           <div class="mic-badge">🎤</div>
@@ -456,17 +460,76 @@ class WebRTCManager {
       if (avatarName) avatarName.textContent = name;
       const avatarId = card.querySelector('.avatar-id-badge');
       if (avatarId) avatarId.textContent = `ID: ${userIdDisplay}`;
+
+      // Update role badges
+      const roleBadges = card.querySelectorAll('.badge-host, .badge-member');
+      roleBadges.forEach((rb) => {
+        rb.className = `badge ${roleBadgeClass}`;
+        rb.textContent = roleBadgeText;
+      });
     }
   }
 
-  // Attach Remote Media Stream to Video & Dedicated Audio Elements
+  // 5. Dedicated Presentation Spotlight / Fullscreen Mode
+  setPresentationMode(cardId, isPresenting) {
+    const grid = document.getElementById('videoGrid');
+    const targetCard = document.getElementById(cardId);
+    if (!grid) return;
+
+    if (isPresenting && targetCard) {
+      grid.classList.add('has-presentation');
+      // Ensure all other cards lose the presenting-stage class
+      grid.querySelectorAll('.video-card').forEach((c) => {
+        if (c !== targetCard) c.classList.remove('presenting-stage');
+      });
+
+      targetCard.classList.add('presenting-stage');
+      targetCard.classList.add('has-video');
+      targetCard.classList.remove('video-off');
+
+      // Add prominent Fullscreen button to the presentation stage
+      let fsBtn = targetCard.querySelector('.btn-presentation-fullscreen');
+      if (!fsBtn) {
+        fsBtn = document.createElement('button');
+        fsBtn.type = 'button';
+        fsBtn.className = 'btn-presentation-fullscreen';
+        fsBtn.innerHTML = '<span>⛶</span><span>Fullscreen</span>';
+        fsBtn.title = 'View Presentation in Fullscreen';
+        fsBtn.onclick = (e) => {
+          e.stopPropagation();
+          if (!document.fullscreenElement) {
+            targetCard.requestFullscreen().catch(() => {});
+            fsBtn.innerHTML = '<span>✕</span><span>Exit Fullscreen</span>';
+          } else {
+            document.exitFullscreen().catch(() => {});
+            fsBtn.innerHTML = '<span>⛶</span><span>Fullscreen</span>';
+          }
+        };
+        targetCard.appendChild(fsBtn);
+      }
+    } else {
+      if (targetCard) {
+        targetCard.classList.remove('presenting-stage');
+        const fsBtn = targetCard.querySelector('.btn-presentation-fullscreen');
+        if (fsBtn) fsBtn.remove();
+      }
+
+      // Check if any other card is still presenting
+      const anyStillPresenting = grid.querySelector('.video-card.presenting-stage');
+      if (!anyStillPresenting) {
+        grid.classList.remove('has-presentation');
+        this.updateGridLayout();
+      }
+    }
+  }
+
+  // Attach Remote Media Stream to Video & Audio Elements
   attachRemoteStream(peerSocketId, stream) {
     this.renderRemoteVideoCard(peerSocketId);
 
     const card = document.getElementById(`video-card-${peerSocketId}`);
     if (!card) return;
 
-    // Dedicated unmuted audio element in global container (guarantees voice plays on mobile & desktop)
     let audioEl = document.getElementById(`audio-${peerSocketId}`);
     if (!audioEl) {
       audioEl = document.createElement('audio');
@@ -504,9 +567,7 @@ class WebRTCManager {
         card.classList.add('has-video');
       };
 
-      videoEl.play().catch((err) => {
-        console.warn('Video play waiting for interaction:', err);
-      });
+      videoEl.play().catch(() => {});
     }
 
     const statusPill = card.querySelector('.status-pill');
@@ -516,7 +577,6 @@ class WebRTCManager {
     }
   }
 
-  // Helper to shorten ID
   shortId(id) {
     if (!id) return '';
     const parts = String(id).split('_');
@@ -526,8 +586,10 @@ class WebRTCManager {
     return String(id).substring(0, 8);
   }
 
-  // 5. Remove Peer
+  // 6. Remove Peer
   removePeer(peerSocketId) {
+    this.setPresentationMode(`video-card-${peerSocketId}`, false);
+
     if (this.peerConnections[peerSocketId]) {
       this.peerConnections[peerSocketId].close();
       delete this.peerConnections[peerSocketId];
@@ -547,7 +609,7 @@ class WebRTCManager {
     this.updateParticipantCount();
   }
 
-  // 6. Audio Toggle
+  // 7. Audio Toggle
   toggleAudio() {
     if (!this.localStream) return false;
     this.isAudioMuted = !this.isAudioMuted;
@@ -571,7 +633,7 @@ class WebRTCManager {
     return !this.isAudioMuted;
   }
 
-  // 7. Video Toggle
+  // 8. Video Toggle
   toggleVideo() {
     if (!this.localStream) return false;
     this.isVideoOff = !this.isVideoOff;
@@ -595,7 +657,7 @@ class WebRTCManager {
     return !this.isVideoOff;
   }
 
-  // 8. Screen Sharing via getDisplayMedia
+  // 9. Screen Sharing: Presents in Dedicated Fullscreen Spotlight Stage
   async toggleScreenShare() {
     if (!this.isScreenSharing) {
       try {
@@ -644,6 +706,9 @@ class WebRTCManager {
         if (localScreenBadge) {
           localScreenBadge.style.display = 'block';
         }
+
+        // Put local card into the Fullscreen Presentation Spotlight Stage!
+        this.setPresentationMode('localVideoCard', true);
 
         this.isScreenSharing = true;
 
@@ -710,6 +775,9 @@ class WebRTCManager {
       localScreenBadge.style.display = 'none';
     }
 
+    // Remove Presentation Spotlight Mode
+    this.setPresentationMode('localVideoCard', false);
+
     this.isScreenSharing = false;
 
     const btnScreen = document.getElementById('btnToggleScreen');
@@ -725,10 +793,10 @@ class WebRTCManager {
     });
   }
 
-  // 9. Update Layout and Count
+  // 10. Update Layout and Count
   updateGridLayout() {
     const videoGrid = document.getElementById('videoGrid');
-    if (!videoGrid) return;
+    if (!videoGrid || videoGrid.classList.contains('has-presentation')) return;
 
     const cards = videoGrid.querySelectorAll('.video-card');
     const count = Math.min(cards.length, 9);
@@ -742,7 +810,7 @@ class WebRTCManager {
     }
   }
 
-  // 10. Clean up everything on call exit
+  // 11. Clean up everything on call exit
   destroy() {
     this.stopScreenSharing();
     if (this.localStream) {

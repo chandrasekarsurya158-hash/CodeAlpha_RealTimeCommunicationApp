@@ -18,6 +18,11 @@ function initSignaling(io) {
         rooms[roomId] = {};
       }
 
+      // First person to enter/create the room is the HOST; anyone joining after is a MEMBER
+      const isFirstUser = Object.keys(rooms[roomId]).length === 0;
+      currentUser.isHost = isFirstUser;
+      currentUser.role = isFirstUser ? 'Host' : 'Member';
+
       // Collect existing participants to send to the newly joined peer
       const existingParticipants = Object.values(rooms[roomId]);
 
@@ -31,7 +36,13 @@ function initSignaling(io) {
         joinedAt: new Date().toISOString()
       };
 
-      // 1. Inform the new user about existing peers
+      // 1. Inform the new user about their role and existing peers
+      socket.emit('room-joined', {
+        isHost: isFirstUser,
+        role: isFirstUser ? 'Host' : 'Member',
+        selfUser: currentUser
+      });
+
       socket.emit('all-users', {
         users: existingParticipants,
         selfSocketId: socket.id
@@ -127,6 +138,7 @@ function initSignaling(io) {
     // --- 4. Disconnect & Leave Room ---
     const handleLeave = () => {
       if (currentRoomId && rooms[currentRoomId] && rooms[currentRoomId][socket.id]) {
+        const wasHost = rooms[currentRoomId][socket.id].user?.isHost;
         delete rooms[currentRoomId][socket.id];
 
         // Notify other room members
@@ -135,8 +147,18 @@ function initSignaling(io) {
           user: currentUser
         });
 
-        // Clean room up if empty
-        if (Object.keys(rooms[currentRoomId]).length === 0) {
+        const remaining = Object.values(rooms[currentRoomId]);
+        if (remaining.length > 0) {
+          // If the host left, pass host status to the next member
+          if (wasHost) {
+            remaining[0].user.isHost = true;
+            remaining[0].user.role = 'Host';
+            io.to(currentRoomId).emit('host-changed', {
+              newHostSocketId: remaining[0].socketId,
+              newHostUser: remaining[0].user
+            });
+          }
+        } else {
           delete rooms[currentRoomId];
           delete whiteboardHistory[currentRoomId];
         }

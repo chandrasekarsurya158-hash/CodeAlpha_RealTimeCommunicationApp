@@ -501,6 +501,87 @@ input:focus, select:focus, textarea:focus {
   grid-template-columns: repeat(3, 1fr);
 }
 
+/* Presentation / Screen Sharing Spotlight Fullscreen Mode */
+.video-grid.has-presentation {
+  display: flex !important;
+  flex-direction: row;
+  gap: 16px;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 12px;
+}
+
+.video-grid.has-presentation .video-card.presenting-stage {
+  flex: 1 1 auto;
+  width: auto;
+  height: 100%;
+  max-height: 82vh;
+  aspect-ratio: auto;
+  border: 2px solid var(--accent-primary);
+  background: #000;
+  z-index: 10;
+}
+
+.video-grid.has-presentation .video-card.presenting-stage video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain !important;
+  display: block !important;
+}
+
+.video-grid.has-presentation .video-card.presenting-stage .avatar-fallback {
+  display: none !important;
+}
+
+/* Other non-presenting participant tiles shrink into a clean vertical sidebar ribbon */
+.video-grid.has-presentation .video-card:not(.presenting-stage) {
+  flex: 0 0 220px;
+  height: 140px;
+  max-height: 140px;
+  aspect-ratio: 16 / 9;
+  z-index: 5;
+}
+
+/* Presentation Fullscreen Button */
+.btn-presentation-fullscreen {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: var(--transition);
+}
+.btn-presentation-fullscreen:hover {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.badge-host {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+  font-weight: 700;
+}
+
+.badge-member {
+  background: rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
 /* Individual Video Tile Card */
 .video-card {
   position: relative;
