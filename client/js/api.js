@@ -1,11 +1,13 @@
 // API Helper for HTTP Requests and Authentication
 const API = {
   getToken() {
-    return localStorage.getItem('token');
+    return sessionStorage.getItem('room_token') || localStorage.getItem('token');
   },
 
   getCurrentUser() {
     try {
+      const sessionUser = sessionStorage.getItem('room_user');
+      if (sessionUser) return JSON.parse(sessionUser);
       const user = localStorage.getItem('user');
       return user ? JSON.parse(user) : null;
     } catch {
@@ -16,11 +18,20 @@ const API = {
   saveAuth(token, user) {
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(user));
+    sessionStorage.setItem('room_token', token);
+    sessionStorage.setItem('room_user', JSON.stringify(user));
+  },
+
+  saveSessionAuth(token, user) {
+    sessionStorage.setItem('room_token', token);
+    sessionStorage.setItem('room_user', JSON.stringify(user));
   },
 
   clearAuth() {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    sessionStorage.removeItem('room_token');
+    sessionStorage.removeItem('room_user');
   },
 
   async request(endpoint, options = {}) {

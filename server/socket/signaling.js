@@ -7,27 +7,43 @@ function initSignaling(io) {
     let currentRoomId = null;
     let currentUser = null;
 
+    // Helper to sanitize room ID (e.g. "571 ia1f" -> "571-1a1f")
+    const sanitizeRoom = (id) => String(id || 'general').trim().toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+
     // --- 1. WebRTC & Room Management ---
     socket.on('join-room', ({ roomId, user }) => {
-      currentRoomId = roomId;
-      currentUser = user || { id: socket.id, name: 'Guest_' + socket.id.substring(0, 4) };
+      const cleanRoom = sanitizeRoom(roomId);
+      currentRoomId = cleanRoom;
 
-      socket.join(roomId);
+      socket.join(cleanRoom);
 
-      if (!rooms[roomId]) {
-        rooms[roomId] = {};
+      if (!rooms[cleanRoom]) {
+        rooms[cleanRoom] = {};
+      }
+
+      // Ensure user profile is valid and unique per tab
+      let peerUser = user ? { ...user } : { id: 'usr_' + socket.id.substring(0, 5), name: 'Guest_' + socket.id.substring(0, 4) };
+
+      // If the same user ID joins twice (e.g. 2 tabs on the same laptop), differentiate them so both can join!
+      const existingUserWithSameId = Object.values(rooms[cleanRoom]).find(
+        (p) => p.user && p.user.id === peerUser.id && p.socketId !== socket.id
+      );
+      if (existingUserWithSameId) {
+        peerUser.id = peerUser.id + '_' + socket.id.substring(0, 4);
+        peerUser.name = peerUser.name + ' (Tab 2)';
       }
 
       // First person to enter/create the room is the HOST; anyone joining after is a MEMBER
-      const isFirstUser = Object.keys(rooms[roomId]).length === 0;
-      currentUser.isHost = isFirstUser;
-      currentUser.role = isFirstUser ? 'Host' : 'Member';
+      const isFirstUser = Object.keys(rooms[cleanRoom]).length === 0;
+      peerUser.isHost = isFirstUser;
+      peerUser.role = isFirstUser ? 'Host' : 'Member';
+      currentUser = peerUser;
 
       // Collect existing participants to send to the newly joined peer
-      const existingParticipants = Object.values(rooms[roomId]);
+      const existingParticipants = Object.values(rooms[cleanRoom]);
 
       // Add new peer to room registry
-      rooms[roomId][socket.id] = {
+      rooms[cleanRoom][socket.id] = {
         socketId: socket.id,
         user: currentUser,
         isAudioMuted: false,
@@ -49,14 +65,14 @@ function initSignaling(io) {
       });
 
       // 2. Broadcast to all other peers in the room that a new user joined
-      socket.to(roomId).emit('user-joined', {
+      socket.to(cleanRoom).emit('user-joined', {
         socketId: socket.id,
         user: currentUser
       });
 
       // 3. Send current whiteboard history to the new user
-      if (whiteboardHistory[roomId] && whiteboardHistory[roomId].length > 0) {
-        socket.emit('whiteboard-sync-history', whiteboardHistory[roomId]);
+      if (whiteboardHistory[cleanRoom] && whiteboardHistory[cleanRoom].length > 0) {
+        socket.emit('whiteboard-sync-history', whiteboardHistory[cleanRoom]);
       }
     });
 

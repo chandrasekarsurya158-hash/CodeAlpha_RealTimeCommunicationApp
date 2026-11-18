@@ -17,18 +17,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     }, duration);
   };
 
-  // 2. Extract Room ID from Query Parameter
+  // 2. Extract & Sanitize Room ID (Handles spaces like "571 ia1f" -> "571-1a1f")
   const urlParams = new URLSearchParams(window.location.search);
-  const roomId = urlParams.get('roomId') || 'general-meet';
+  const rawRoomId = urlParams.get('roomId') || 'general-meet';
+  const roomId = String(rawRoomId).trim().toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
 
-  // 3. Authentication Verification
+  // 3. Tab-Isolated Authentication (Allows opening 2+ tabs with different IDs on the same laptop)
   let currentUser = API.getCurrentUser();
-  const token = API.getToken();
+  let token = API.getToken();
 
-  if (!token || !currentUser) {
-    // If not authenticated, redirect to the Google Meet/Zoom style invite pre-join page
-    window.location.href = `/?roomId=${encodeURIComponent(roomId)}`;
-    return;
+  // If no user or if this tab needs an independent identity
+  if (!currentUser || !token) {
+    const randomSuffix = Math.random().toString(36).substring(2, 6);
+    const guestUser = {
+      id: 'guest_' + Date.now().toString(36) + '_' + randomSuffix,
+      name: 'Member_' + randomSuffix
+    };
+    currentUser = guestUser;
+    token = 'guest_token_' + randomSuffix;
+    API.saveSessionAuth(token, currentUser);
   }
 
   function shortId(id) {
@@ -58,7 +65,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const localAvatarInitial = document.getElementById('localAvatarInitial');
   if (localAvatarInitial) localAvatarInitial.textContent = currentUser.name.charAt(0).toUpperCase();
 
-  // 4. Copy Room Code & Invite Link Handlers
+  // 4. Copy Room Code & Direct Invite Link Handlers
   const btnCopyRoomId = document.getElementById('btnCopyRoomId');
   if (btnCopyRoomId) {
     btnCopyRoomId.addEventListener('click', () => {
@@ -70,7 +77,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnCopyInviteLink = document.getElementById('btnCopyInviteLink');
   if (btnCopyInviteLink) {
     btnCopyInviteLink.addEventListener('click', () => {
-      const inviteUrl = `${window.location.origin}/?roomId=${encodeURIComponent(roomId)}`;
+      // Direct invite link straight to the room
+      const inviteUrl = `${window.location.origin}/room?roomId=${encodeURIComponent(roomId)}`;
       navigator.clipboard.writeText(inviteUrl);
       window.showToast('Invite link copied! Send it to participants.');
     });

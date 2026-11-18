@@ -1,7 +1,10 @@
 // Lobby, Authentication & Google Meet / Zoom Style Pre-Meeting Green Room
 document.addEventListener('DOMContentLoaded', async () => {
   const urlParams = new URLSearchParams(window.location.search);
-  const inviteRoomId = urlParams.get('roomId');
+  const rawInviteRoomId = urlParams.get('roomId');
+  const inviteRoomId = rawInviteRoomId
+    ? String(rawInviteRoomId).trim().toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-')
+    : null;
 
   // Top Nav
   const userProfileNav = document.getElementById('userProfileNav');
