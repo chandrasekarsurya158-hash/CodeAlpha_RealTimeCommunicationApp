@@ -1,4 +1,4 @@
-// WebRTC Peer-to-Peer Mesh Manager with Robust Fallback and Queued Signaling
+// WebRTC Peer-to-Peer Mesh Manager with Open-Relay TURN Fallback & Robust Audio/Video
 class WebRTCManager {
   constructor({ socket, roomId, currentUser, onParticipantChange }) {
     this.socket = socket;
@@ -17,45 +17,69 @@ class WebRTCManager {
     this.isVideoOff = false;
     this.isScreenSharing = false;
 
+    // Public STUN and Open-Relay TURN configuration for cloud deployments (Render, AWS, Heroku)
     this.rtcConfig = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' }
-      ]
+        { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: 'stun:stun.services.mozilla.com' },
+        { urls: 'stun:global.stun.twilio.com:3478' },
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ],
+      iceCandidatePoolSize: 10
     };
 
-    // Unlock audio on any page interaction for browser autoplay compliance
+    // Unlock audio on any user interaction for browser autoplay compliance
     this.setupAutoplayUnlock();
   }
 
   // Set up autoplay audio/video unlock listener
   setupAutoplayUnlock() {
     const unlock = () => {
-      const videos = document.querySelectorAll('.video-card:not(.local) video');
-      videos.forEach((v) => {
-        if (v.paused) {
-          v.play().catch(() => {});
+      const mediaElements = document.querySelectorAll('.video-card:not(.local) video, .remote-audio-track');
+      mediaElements.forEach((m) => {
+        if (m.paused) {
+          m.play().catch(() => {});
         }
       });
     };
     document.addEventListener('click', unlock, { once: false });
+    document.addEventListener('touchstart', unlock, { once: false });
     document.addEventListener('keydown', unlock, { once: false });
   }
 
   // 1. Initialize Local Media Stream with Hardware Conflict Fallbacks
   async initLocalStream() {
-    // Attempt 1: Full webcam and microphone
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: { echoCancellation: true, noiseSuppression: true }
       });
+
+      const localCard = document.getElementById('localVideoCard');
+      if (localCard) {
+        localCard.classList.add('has-video');
+        localCard.classList.remove('video-off');
+      }
     } catch (err1) {
-      console.warn('Direct camera+mic access failed (hardware busy or permissions), attempting audio only...', err1);
-      // Attempt 2: Audio only + Canvas Avatar video track (common when testing two tabs on one PC)
+      console.warn('Direct camera+mic access failed, attempting audio only...', err1);
       try {
         const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const canvasVideoTrack = this.createCanvasVideoTrack(this.currentUser.name);
@@ -63,15 +87,21 @@ class WebRTCManager {
           ...audioStream.getAudioTracks(),
           canvasVideoTrack
         ]);
-        if (window.showToast) {
-          window.showToast('Camera in use by another tab; generated live avatar video stream');
+
+        const localCard = document.getElementById('localVideoCard');
+        if (localCard) {
+          localCard.classList.add('has-video');
         }
       } catch (err2) {
         console.warn('Audio access also failed, using synthetic media stream fallback...', err2);
-        // Attempt 3: Synthetic media stream (silent audio + animated avatar video)
         const canvasVideoTrack = this.createCanvasVideoTrack(this.currentUser.name);
         const silentAudioTrack = this.createSilentAudioTrack();
         this.localStream = new MediaStream([canvasVideoTrack, silentAudioTrack]);
+
+        const localCard = document.getElementById('localVideoCard');
+        if (localCard) {
+          localCard.classList.add('has-video');
+        }
       }
     }
 
@@ -79,12 +109,13 @@ class WebRTCManager {
     if (localVideo) {
       localVideo.srcObject = this.localStream;
       localVideo.muted = true; // Always mute local video to prevent audio feedback
+      localVideo.play().catch(() => {});
     }
 
     return this.localStream;
   }
 
-  // Helper: Generates a 25fps animated avatar video track from HTML5 Canvas
+  // Generates a 25fps animated avatar video track from HTML5 Canvas
   createCanvasVideoTrack(name) {
     const canvas = document.createElement('canvas');
     canvas.width = 640;
@@ -95,11 +126,9 @@ class WebRTCManager {
     let step = 0;
     const draw = () => {
       step += 0.03;
-      // Elegant dark background with subtle pulse
       ctx.fillStyle = '#0f172a';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Central pulsing gradient avatar circle
       const radius = 64 + Math.sin(step) * 4;
       const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
       grad.addColorStop(0, '#3b82f6');
@@ -113,25 +142,23 @@ class WebRTCManager {
       ctx.fill();
       ctx.shadowBlur = 0;
 
-      // Draw initial
       ctx.font = 'bold 54px -apple-system, sans-serif';
       ctx.fillStyle = '#ffffff';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(initial, canvas.width / 2, canvas.height / 2 - 14);
 
-      // Draw user name label
       ctx.font = '600 18px -apple-system, sans-serif';
       ctx.fillStyle = '#e2e8f0';
       ctx.fillText(name || 'Participant', canvas.width / 2, canvas.height / 2 + 75);
     };
 
     draw();
-    setInterval(draw, 40); // 25 fps
+    setInterval(draw, 40);
     return canvas.captureStream(25).getVideoTracks()[0];
   }
 
-  // Helper: Generates a silent Web Audio API track
+  // Generates a silent Web Audio track
   createSilentAudioTrack() {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -139,7 +166,7 @@ class WebRTCManager {
       const osc = ctx.createOscillator();
       const dst = ctx.createMediaStreamDestination();
       const gain = ctx.createGain();
-      gain.gain.value = 0; // Completely silent
+      gain.gain.value = 0;
       osc.connect(gain);
       gain.connect(dst);
       osc.start();
@@ -155,7 +182,6 @@ class WebRTCManager {
     this.socket.on('all-users', async ({ users }) => {
       for (const peer of users) {
         this.peerProfiles[peer.socketId] = peer.user;
-        // Immediately render the peer card so their ID and Name show at once
         this.renderRemoteVideoCard(peer.socketId, peer.user);
         // Create an offer to each existing peer
         await this.createPeerConnection(peer.socketId, true);
@@ -166,12 +192,11 @@ class WebRTCManager {
     // When another user joins after us
     this.socket.on('user-joined', async ({ socketId, user }) => {
       this.peerProfiles[socketId] = user;
-      // Immediately render the peer card so their ID and Name show at once
       this.renderRemoteVideoCard(socketId, user);
       this.updateParticipantCount();
 
       if (window.showToast) {
-        window.showToast(`${user.name || 'A participant'} (ID: ${this.shortId(user.id)}) joined the call`);
+        window.showToast(`${user.name || 'A participant'} (ID: ${this.shortId(user.id)}) joined`);
       }
     });
 
@@ -192,16 +217,19 @@ class WebRTCManager {
           const desc = new RTCSessionDescription(signalData.sdp);
           await pc.setRemoteDescription(desc);
 
-          // Flush any ICE candidates queued before remote description was set
+          // Flush any queued ICE candidates safely
           if (this.iceQueues[from] && this.iceQueues[from].length > 0) {
-            for (const candidate of this.iceQueues[from]) {
-              try {
-                await pc.addIceCandidate(new RTCIceCandidate(candidate));
-              } catch (e) {
-                console.warn('Error adding queued candidate:', e);
+            const queue = [...this.iceQueues[from]];
+            this.iceQueues[from] = [];
+            for (const cand of queue) {
+              if (cand && cand.candidate) {
+                try {
+                  await pc.addIceCandidate(new RTCIceCandidate(cand));
+                } catch (e) {
+                  console.warn('Error adding queued candidate:', e);
+                }
               }
             }
-            this.iceQueues[from] = [];
           }
 
           if (desc.type === 'offer') {
@@ -214,10 +242,12 @@ class WebRTCManager {
             });
           }
         } else if (signalData.candidate) {
-          // If remote description is already set, add candidate directly; otherwise queue it
+          const cand = signalData.candidate;
+          if (!cand || !cand.candidate) return;
+
           if (pc.remoteDescription && pc.remoteDescription.type) {
             try {
-              await pc.addIceCandidate(new RTCIceCandidate(signalData.candidate));
+              await pc.addIceCandidate(new RTCIceCandidate(cand));
             } catch (e) {
               console.warn('Error adding ICE candidate:', e);
             }
@@ -225,7 +255,7 @@ class WebRTCManager {
             if (!this.iceQueues[from]) {
               this.iceQueues[from] = [];
             }
-            this.iceQueues[from].push(signalData.candidate);
+            this.iceQueues[from].push(cand);
           }
         }
       } catch (err) {
@@ -238,11 +268,18 @@ class WebRTCManager {
       const card = document.getElementById(`video-card-${socketId}`);
       if (card) {
         card.classList.toggle('video-off', isVideoOff);
+        if (isVideoOff) {
+          card.classList.remove('has-video');
+        } else {
+          card.classList.add('has-video');
+        }
+
         const micBadge = card.querySelector('.mic-badge');
         if (micBadge) {
           micBadge.classList.toggle('muted', isAudioMuted);
           micBadge.innerHTML = isAudioMuted ? '🔇' : '🎤';
         }
+
         const screenBadge = card.querySelector('.screen-share-badge');
         if (screenBadge) {
           screenBadge.style.display = isScreenSharing ? 'block' : 'none';
@@ -278,20 +315,9 @@ class WebRTCManager {
       });
     }
 
-    // Always ensure transceivers are present for bidirectional audio and video
-    const kinds = ['audio', 'video'];
-    kinds.forEach((kind) => {
-      const hasSender = pc.getSenders().some((s) => s.track && s.track.kind === kind);
-      if (!hasSender) {
-        try {
-          pc.addTransceiver(kind, { direction: 'sendrecv' });
-        } catch {}
-      }
-    });
-
     // ICE Candidate generation
     pc.onicecandidate = (event) => {
-      if (event.candidate) {
+      if (event.candidate && event.candidate.candidate) {
         this.socket.emit('signal', {
           to: peerSocketId,
           signalData: { candidate: event.candidate }
@@ -368,7 +394,7 @@ class WebRTCManager {
     if (!card) {
       card = document.createElement('div');
       card.id = `video-card-${peerSocketId}`;
-      card.className = 'video-card';
+      card.className = 'video-card'; // Starts with avatar showing by default
 
       card.innerHTML = `
         <video id="video-${peerSocketId}" autoplay playsinline></video>
@@ -392,7 +418,6 @@ class WebRTCManager {
       videoGrid.appendChild(card);
       this.updateGridLayout();
     } else {
-      // Update names and IDs if card already existed
       const nameEl = card.querySelector('.peer-name');
       if (nameEl) nameEl.textContent = name;
       const idTag = card.querySelector('.user-id-tag');
@@ -404,20 +429,47 @@ class WebRTCManager {
     }
   }
 
-  // Attach Remote Media Stream to Video Element and Play Audio
+  // Attach Remote Media Stream to Video & Audio Elements
   attachRemoteStream(peerSocketId, stream) {
     this.renderRemoteVideoCard(peerSocketId);
 
     const card = document.getElementById(`video-card-${peerSocketId}`);
     if (!card) return;
 
+    // Dedicated unmuted audio element to guarantee voice is heard across all browsers
+    let audioEl = card.querySelector('audio.remote-audio-track');
+    if (!audioEl) {
+      audioEl = document.createElement('audio');
+      audioEl.className = 'remote-audio-track';
+      audioEl.autoplay = true;
+      audioEl.playsInline = true;
+      audioEl.style.display = 'none';
+      card.appendChild(audioEl);
+    }
+    if (audioEl.srcObject !== stream) {
+      audioEl.srcObject = stream;
+      audioEl.muted = false;
+      audioEl.volume = 1.0;
+      audioEl.play().catch(() => {});
+    }
+
     const videoEl = card.querySelector('video');
     if (videoEl) {
       if (videoEl.srcObject !== stream) {
         videoEl.srcObject = stream;
-        videoEl.muted = false; // UNMUTED so other participant's voice is heard!
+        videoEl.muted = false;
         videoEl.volume = 1.0;
       }
+
+      videoEl.onloadedmetadata = () => {
+        card.classList.add('has-video');
+        videoEl.play().catch(() => {});
+      };
+
+      videoEl.onplaying = () => {
+        card.classList.add('has-video');
+      };
+
       videoEl.play().catch((err) => {
         console.warn('Autoplay waiting for user interaction:', err);
       });
@@ -430,7 +482,7 @@ class WebRTCManager {
     }
   }
 
-  // Shorten ID for clean display: e.g. user_1731912345_abc -> abc or first 8 chars
+  // Helper to shorten ID
   shortId(id) {
     if (!id) return '';
     const parts = String(id).split('_');
@@ -493,6 +545,7 @@ class WebRTCManager {
     const localVideoCard = document.getElementById('localVideoCard');
     if (localVideoCard) {
       localVideoCard.classList.toggle('video-off', this.isVideoOff);
+      localVideoCard.classList.toggle('has-video', !this.isVideoOff);
     }
 
     this.socket.emit('media-state-changed', {
@@ -525,11 +578,16 @@ class WebRTCManager {
           }
         }
 
-        // Display screen track on local video tile
         const localVideo = document.getElementById('localVideo');
         if (localVideo) {
           localVideo.srcObject = this.screenStream;
           localVideo.classList.add('screen-sharing');
+        }
+
+        const localCard = document.getElementById('localVideoCard');
+        if (localCard) {
+          localCard.classList.add('has-video');
+          localCard.classList.remove('video-off');
         }
 
         const localScreenBadge = document.getElementById('localScreenBadge');
@@ -539,7 +597,6 @@ class WebRTCManager {
 
         this.isScreenSharing = true;
 
-        // When user stops sharing from browser chrome bar
         screenTrack.onended = () => {
           this.stopScreenSharing();
         };
@@ -570,7 +627,6 @@ class WebRTCManager {
       this.screenStream = null;
     }
 
-    // Revert back to local webcam/canvas video track
     const camTrack = this.localStream ? this.localStream.getVideoTracks()[0] : null;
 
     for (const socketId in this.peerConnections) {
@@ -594,7 +650,6 @@ class WebRTCManager {
 
     this.isScreenSharing = false;
 
-    // Update screen share button UI state if present
     const btnScreen = document.getElementById('btnToggleScreen');
     if (btnScreen) {
       btnScreen.classList.remove('active');
@@ -619,7 +674,7 @@ class WebRTCManager {
   }
 
   updateParticipantCount() {
-    const totalCount = Object.keys(this.peerProfiles).length + 1; // peers + self
+    const totalCount = Object.keys(this.peerProfiles).length + 1;
     if (this.onParticipantChange) {
       this.onParticipantChange(totalCount, this.peerProfiles);
     }

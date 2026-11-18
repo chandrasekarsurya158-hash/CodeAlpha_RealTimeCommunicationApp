@@ -190,6 +190,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       btnToggleCam.classList.toggle('danger-toggle', !isVideoOn);
       btnToggleCam.title = isVideoOn ? 'Turn Off Camera' : 'Turn On Camera';
       btnToggleCam.querySelector('.icon').textContent = isVideoOn ? '📹' : '🚫';
+
+      const localCard = document.getElementById('localVideoCard');
+      if (localCard) {
+        localCard.classList.toggle('has-video', isVideoOn);
+        localCard.classList.toggle('video-off', !isVideoOn);
+      }
     });
   }
 
