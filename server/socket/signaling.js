@@ -87,12 +87,13 @@ function initSignaling(io) {
 
     // Media state toggles (mic muted, camera off, screen share)
     socket.on('media-state-changed', ({ roomId, isAudioMuted, isVideoOff, isScreenSharing }) => {
-      if (rooms[roomId] && rooms[roomId][socket.id]) {
-        rooms[roomId][socket.id].isAudioMuted = isAudioMuted;
-        rooms[roomId][socket.id].isVideoOff = isVideoOff;
-        rooms[roomId][socket.id].isScreenSharing = isScreenSharing;
+      const clean = sanitizeRoom(roomId);
+      if (rooms[clean] && rooms[clean][socket.id]) {
+        rooms[clean][socket.id].isAudioMuted = isAudioMuted;
+        rooms[clean][socket.id].isVideoOff = isVideoOff;
+        rooms[clean][socket.id].isScreenSharing = isScreenSharing;
 
-        socket.to(roomId).emit('peer-media-state', {
+        socket.to(clean).emit('peer-media-state', {
           socketId: socket.id,
           isAudioMuted,
           isVideoOff,
@@ -103,38 +104,39 @@ function initSignaling(io) {
 
     // --- 2. Collaborative Whiteboard ---
     socket.on('whiteboard-draw', ({ roomId, drawData }) => {
-      if (!roomId || !drawData) return;
-      if (!whiteboardHistory[roomId]) {
-        whiteboardHistory[roomId] = [];
+      const clean = sanitizeRoom(roomId);
+      if (!clean || !drawData) return;
+      if (!whiteboardHistory[clean]) {
+        whiteboardHistory[clean] = [];
       }
 
-      // Limit history to last 5000 strokes to prevent unbounded memory growth
-      if (whiteboardHistory[roomId].length > 5000) {
-        whiteboardHistory[roomId].shift();
+      if (whiteboardHistory[clean].length > 5000) {
+        whiteboardHistory[clean].shift();
       }
-      whiteboardHistory[roomId].push(drawData);
+      whiteboardHistory[clean].push(drawData);
 
-      // Relay to all peers in the room except sender
-      socket.to(roomId).emit('whiteboard-draw', drawData);
+      socket.to(clean).emit('whiteboard-draw', drawData);
     });
 
     socket.on('whiteboard-clear', ({ roomId }) => {
-      if (!roomId) return;
-      whiteboardHistory[roomId] = [];
-      // Notify everyone in the room (including sender) to clear
-      io.to(roomId).emit('whiteboard-clear');
+      const clean = sanitizeRoom(roomId);
+      if (!clean) return;
+      whiteboardHistory[clean] = [];
+      io.to(clean).emit('whiteboard-clear');
     });
 
     socket.on('whiteboard-request-sync', ({ roomId }) => {
-      if (roomId && whiteboardHistory[roomId]) {
-        socket.emit('whiteboard-sync-history', whiteboardHistory[roomId]);
+      const clean = sanitizeRoom(roomId);
+      if (clean && whiteboardHistory[clean]) {
+        socket.emit('whiteboard-sync-history', whiteboardHistory[clean]);
       }
     });
 
     // --- 3. In-Room Chat & File Broadcast ---
     socket.on('chat-message', ({ roomId, message, user, timestamp }) => {
-      if (!roomId) return;
-      io.to(roomId).emit('chat-message', {
+      const clean = sanitizeRoom(roomId);
+      if (!clean) return;
+      io.to(clean).emit('chat-message', {
         id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
         user: user || currentUser,
         message,
@@ -143,8 +145,9 @@ function initSignaling(io) {
     });
 
     socket.on('file-shared', ({ roomId, file }) => {
-      if (!roomId || !file) return;
-      io.to(roomId).emit('file-shared', {
+      const clean = sanitizeRoom(roomId);
+      if (!clean || !file) return;
+      io.to(clean).emit('file-shared', {
         file,
         sharedBy: currentUser,
         timestamp: new Date().toISOString()

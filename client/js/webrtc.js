@@ -523,51 +523,63 @@ class WebRTCManager {
     }
   }
 
-  // Attach Remote Media Stream to Video & Audio Elements
+  // Attach Remote Media Stream to Video & Dedicated Audio Elements
   attachRemoteStream(peerSocketId, stream) {
     this.renderRemoteVideoCard(peerSocketId);
 
     const card = document.getElementById(`video-card-${peerSocketId}`);
     if (!card) return;
 
-    let audioEl = document.getElementById(`audio-${peerSocketId}`);
-    if (!audioEl) {
-      audioEl = document.createElement('audio');
-      audioEl.id = `audio-${peerSocketId}`;
-      audioEl.autoplay = true;
-      audioEl.playsInline = true;
-      const container = document.getElementById('remoteAudioContainer') || document.body;
-      container.appendChild(audioEl);
-    }
-    if (audioEl.srcObject !== stream) {
-      audioEl.srcObject = stream;
-      audioEl.muted = false;
-      audioEl.volume = 1.0;
-      audioEl.play().catch((err) => {
-        console.warn('Audio play restricted until user gesture:', err);
-        const banner = document.getElementById('audioUnlockBanner');
-        if (banner) banner.style.display = 'flex';
-      });
+    // 1. Separate Audio Output: Unmuted audio element plays voice
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length > 0) {
+      let audioEl = document.getElementById(`audio-${peerSocketId}`);
+      if (!audioEl) {
+        audioEl = document.createElement('audio');
+        audioEl.id = `audio-${peerSocketId}`;
+        audioEl.autoplay = true;
+        audioEl.playsInline = true;
+        const container = document.getElementById('remoteAudioContainer') || document.body;
+        container.appendChild(audioEl);
+      }
+      const audioStream = new MediaStream(audioTracks);
+      if (audioEl.srcObject !== audioStream) {
+        audioEl.srcObject = audioStream;
+        audioEl.muted = false;
+        audioEl.volume = 1.0;
+        audioEl.play().catch((err) => {
+          console.warn('Audio waiting for tap/interaction:', err);
+          const banner = document.getElementById('audioUnlockBanner');
+          if (banner) banner.style.display = 'flex';
+        });
+      }
     }
 
+    // 2. Video Output: MUST be muted=true so Chrome/Safari NEVER blocks video autoplay!
     const videoEl = card.querySelector('video');
-    if (videoEl) {
+    const videoTracks = stream.getVideoTracks();
+    if (videoEl && videoTracks.length > 0) {
+      videoEl.muted = true; // Crucial for Chrome Autoplay compliance!
+      videoEl.autoplay = true;
+      videoEl.playsInline = true;
+
       if (videoEl.srcObject !== stream) {
         videoEl.srcObject = stream;
-        videoEl.muted = false;
-        videoEl.volume = 1.0;
       }
 
-      videoEl.onloadedmetadata = () => {
+      const showVideo = () => {
         card.classList.add('has-video');
-        videoEl.play().catch(() => {});
+        card.classList.remove('video-off');
       };
 
-      videoEl.onplaying = () => {
-        card.classList.add('has-video');
-      };
+      videoEl.onloadedmetadata = showVideo;
+      videoEl.onplaying = showVideo;
 
-      videoEl.play().catch(() => {});
+      const p = videoEl.play();
+      if (p !== undefined) {
+        p.then(showVideo).catch(() => showVideo());
+      }
+      showVideo();
     }
 
     const statusPill = card.querySelector('.status-pill');
