@@ -1,15 +1,17 @@
-// WebRTC Peer-to-Peer Mesh Manager
+// WebRTC Peer-to-Peer Mesh Manager with Robust Fallback and Queued Signaling
 class WebRTCManager {
   constructor({ socket, roomId, currentUser, onParticipantChange }) {
     this.socket = socket;
     this.roomId = roomId;
-    this.currentUser = currentUser;
+    this.currentUser = currentUser || { id: 'user_' + Date.now(), name: 'Guest' };
     this.onParticipantChange = onParticipantChange;
 
     this.localStream = null;
     this.screenStream = null;
     this.peerConnections = {}; // socketId -> RTCPeerConnection
     this.peerProfiles = {}; // socketId -> user profile
+    this.iceQueues = {}; // socketId -> [ RTCIceCandidate ]
+    this.remoteStreams = {}; // socketId -> MediaStream
 
     this.isAudioMuted = false;
     this.isVideoOff = false;
@@ -19,30 +21,131 @@ class WebRTCManager {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' }
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' }
       ]
     };
+
+    // Unlock audio on any page interaction for browser autoplay compliance
+    this.setupAutoplayUnlock();
   }
 
-  // 1. Initialize Local Media Stream
+  // Set up autoplay audio/video unlock listener
+  setupAutoplayUnlock() {
+    const unlock = () => {
+      const videos = document.querySelectorAll('.video-card:not(.local) video');
+      videos.forEach((v) => {
+        if (v.paused) {
+          v.play().catch(() => {});
+        }
+      });
+    };
+    document.addEventListener('click', unlock, { once: false });
+    document.addEventListener('keydown', unlock, { once: false });
+  }
+
+  // 1. Initialize Local Media Stream with Hardware Conflict Fallbacks
   async initLocalStream() {
+    // Attempt 1: Full webcam and microphone
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: true
+        audio: { echoCancellation: true, noiseSuppression: true }
       });
-
-      const localVideo = document.getElementById('localVideo');
-      if (localVideo) {
-        localVideo.srcObject = this.localStream;
+    } catch (err1) {
+      console.warn('Direct camera+mic access failed (hardware busy or permissions), attempting audio only...', err1);
+      // Attempt 2: Audio only + Canvas Avatar video track (common when testing two tabs on one PC)
+      try {
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const canvasVideoTrack = this.createCanvasVideoTrack(this.currentUser.name);
+        this.localStream = new MediaStream([
+          ...audioStream.getAudioTracks(),
+          canvasVideoTrack
+        ]);
+        if (window.showToast) {
+          window.showToast('Camera in use by another tab; generated live avatar video stream');
+        }
+      } catch (err2) {
+        console.warn('Audio access also failed, using synthetic media stream fallback...', err2);
+        // Attempt 3: Synthetic media stream (silent audio + animated avatar video)
+        const canvasVideoTrack = this.createCanvasVideoTrack(this.currentUser.name);
+        const silentAudioTrack = this.createSilentAudioTrack();
+        this.localStream = new MediaStream([canvasVideoTrack, silentAudioTrack]);
       }
-      return this.localStream;
-    } catch (error) {
-      console.warn('Could not access camera/mic, falling back to dummy/audio stream:', error);
-      // Fallback: create empty audio track or alert user
-      alert('Camera or Microphone access was denied or not found. You will join in view-only mode.');
-      this.localStream = new MediaStream();
-      return this.localStream;
+    }
+
+    const localVideo = document.getElementById('localVideo');
+    if (localVideo) {
+      localVideo.srcObject = this.localStream;
+      localVideo.muted = true; // Always mute local video to prevent audio feedback
+    }
+
+    return this.localStream;
+  }
+
+  // Helper: Generates a 25fps animated avatar video track from HTML5 Canvas
+  createCanvasVideoTrack(name) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+    const initial = (name || 'U').charAt(0).toUpperCase();
+
+    let step = 0;
+    const draw = () => {
+      step += 0.03;
+      // Elegant dark background with subtle pulse
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Central pulsing gradient avatar circle
+      const radius = 64 + Math.sin(step) * 4;
+      const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+      grad.addColorStop(0, '#3b82f6');
+      grad.addColorStop(1, '#8b5cf6');
+
+      ctx.beginPath();
+      ctx.arc(canvas.width / 2, canvas.height / 2 - 14, radius, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.shadowColor = 'rgba(59, 130, 246, 0.5)';
+      ctx.shadowBlur = 20;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Draw initial
+      ctx.font = 'bold 54px -apple-system, sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(initial, canvas.width / 2, canvas.height / 2 - 14);
+
+      // Draw user name label
+      ctx.font = '600 18px -apple-system, sans-serif';
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText(name || 'Participant', canvas.width / 2, canvas.height / 2 + 75);
+    };
+
+    draw();
+    setInterval(draw, 40); // 25 fps
+    return canvas.captureStream(25).getVideoTracks()[0];
+  }
+
+  // Helper: Generates a silent Web Audio API track
+  createSilentAudioTrack() {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const dst = ctx.createMediaStreamDestination();
+      const gain = ctx.createGain();
+      gain.gain.value = 0; // Completely silent
+      osc.connect(gain);
+      gain.connect(dst);
+      osc.start();
+      return dst.stream.getAudioTracks()[0];
+    } catch {
+      return new MediaStream().getAudioTracks()[0];
     }
   }
 
@@ -52,6 +155,8 @@ class WebRTCManager {
     this.socket.on('all-users', async ({ users }) => {
       for (const peer of users) {
         this.peerProfiles[peer.socketId] = peer.user;
+        // Immediately render the peer card so their ID and Name show at once
+        this.renderRemoteVideoCard(peer.socketId, peer.user);
         // Create an offer to each existing peer
         await this.createPeerConnection(peer.socketId, true);
       }
@@ -59,11 +164,14 @@ class WebRTCManager {
     });
 
     // When another user joins after us
-    this.socket.on('user-joined', ({ socketId, user }) => {
+    this.socket.on('user-joined', async ({ socketId, user }) => {
       this.peerProfiles[socketId] = user;
+      // Immediately render the peer card so their ID and Name show at once
+      this.renderRemoteVideoCard(socketId, user);
       this.updateParticipantCount();
+
       if (window.showToast) {
-        window.showToast(`${user.name || 'A participant'} joined the call`);
+        window.showToast(`${user.name || 'A participant'} (ID: ${this.shortId(user.id)}) joined the call`);
       }
     });
 
@@ -71,6 +179,7 @@ class WebRTCManager {
     this.socket.on('signal', async ({ from, signalData, user }) => {
       if (user) {
         this.peerProfiles[from] = user;
+        this.renderRemoteVideoCard(from, user);
       }
 
       let pc = this.peerConnections[from];
@@ -80,9 +189,22 @@ class WebRTCManager {
 
       try {
         if (signalData.sdp) {
-          await pc.setRemoteDescription(new RTCSessionDescription(signalData.sdp));
+          const desc = new RTCSessionDescription(signalData.sdp);
+          await pc.setRemoteDescription(desc);
 
-          if (signalData.sdp.type === 'offer') {
+          // Flush any ICE candidates queued before remote description was set
+          if (this.iceQueues[from] && this.iceQueues[from].length > 0) {
+            for (const candidate of this.iceQueues[from]) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(candidate));
+              } catch (e) {
+                console.warn('Error adding queued candidate:', e);
+              }
+            }
+            this.iceQueues[from] = [];
+          }
+
+          if (desc.type === 'offer') {
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
 
@@ -92,10 +214,18 @@ class WebRTCManager {
             });
           }
         } else if (signalData.candidate) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(signalData.candidate));
-          } catch (e) {
-            console.error('Error adding ICE candidate:', e);
+          // If remote description is already set, add candidate directly; otherwise queue it
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(signalData.candidate));
+            } catch (e) {
+              console.warn('Error adding ICE candidate:', e);
+            }
+          } else {
+            if (!this.iceQueues[from]) {
+              this.iceQueues[from] = [];
+            }
+            this.iceQueues[from].push(signalData.candidate);
           }
         }
       } catch (err) {
@@ -124,8 +254,9 @@ class WebRTCManager {
     this.socket.on('user-left', ({ socketId, user }) => {
       this.removePeer(socketId);
       const name = user ? user.name : 'A participant';
+      const uid = user ? this.shortId(user.id) : '';
       if (window.showToast) {
-        window.showToast(`${name} left the call`);
+        window.showToast(`${name} (ID: ${uid}) left the call`);
       }
     });
   }
@@ -138,6 +269,7 @@ class WebRTCManager {
 
     const pc = new RTCPeerConnection(this.rtcConfig);
     this.peerConnections[peerSocketId] = pc;
+    this.iceQueues[peerSocketId] = [];
 
     // Add local tracks to peer connection
     if (this.localStream) {
@@ -145,6 +277,17 @@ class WebRTCManager {
         pc.addTrack(track, this.localStream);
       });
     }
+
+    // Always ensure transceivers are present for bidirectional audio and video
+    const kinds = ['audio', 'video'];
+    kinds.forEach((kind) => {
+      const hasSender = pc.getSenders().some((s) => s.track && s.track.kind === kind);
+      if (!hasSender) {
+        try {
+          pc.addTransceiver(kind, { direction: 'sendrecv' });
+        } catch {}
+      }
+    });
 
     // ICE Candidate generation
     pc.onicecandidate = (event) => {
@@ -158,12 +301,33 @@ class WebRTCManager {
 
     // Remote Track received
     pc.ontrack = (event) => {
-      const [remoteStream] = event.streams;
-      this.renderRemoteVideo(peerSocketId, remoteStream);
+      let remoteStream = event.streams && event.streams[0];
+      if (!remoteStream) {
+        if (!this.remoteStreams[peerSocketId]) {
+          this.remoteStreams[peerSocketId] = new MediaStream();
+        }
+        this.remoteStreams[peerSocketId].addTrack(event.track);
+        remoteStream = this.remoteStreams[peerSocketId];
+      } else {
+        this.remoteStreams[peerSocketId] = remoteStream;
+      }
+
+      this.attachRemoteStream(peerSocketId, remoteStream);
     };
 
-    // Handle connection state changes
+    // Track connection state
     pc.onconnectionstatechange = () => {
+      const statusPill = document.querySelector(`#video-card-${peerSocketId} .status-pill`);
+      if (statusPill) {
+        if (pc.connectionState === 'connected') {
+          statusPill.textContent = 'Live 🟢';
+          statusPill.className = 'status-pill connected';
+        } else if (pc.connectionState === 'connecting') {
+          statusPill.textContent = 'Connecting...';
+          statusPill.className = 'status-pill connecting';
+        }
+      }
+
       if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         this.removePeer(peerSocketId);
       }
@@ -172,7 +336,10 @@ class WebRTCManager {
     // If initiator, generate SDP offer
     if (isInitiator) {
       try {
-        const offer = await pc.createOffer();
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true
+        });
         await pc.setLocalDescription(offer);
 
         this.socket.emit('signal', {
@@ -187,14 +354,16 @@ class WebRTCManager {
     return pc;
   }
 
-  // 4. Render Remote Video Tile in Grid
-  renderRemoteVideo(peerSocketId, stream) {
+  // 4. Render or Update Remote Video Card Tile in Grid
+  renderRemoteVideoCard(peerSocketId, user) {
     const videoGrid = document.getElementById('videoGrid');
     if (!videoGrid) return;
 
     let card = document.getElementById(`video-card-${peerSocketId}`);
-    const peerUser = this.peerProfiles[peerSocketId] || { name: 'Participant' };
-    const initial = peerUser.name.charAt(0).toUpperCase();
+    const peerUser = user || this.peerProfiles[peerSocketId] || { name: 'Participant', id: peerSocketId };
+    const name = peerUser.name || 'Participant';
+    const userIdDisplay = this.shortId(peerUser.id || peerSocketId);
+    const initial = name.charAt(0).toUpperCase();
 
     if (!card) {
       card = document.createElement('div');
@@ -205,24 +374,70 @@ class WebRTCManager {
         <video id="video-${peerSocketId}" autoplay playsinline></video>
         <div class="avatar-fallback">
           <div class="avatar-circle">${initial}</div>
-          <span style="font-size:0.9rem; font-weight:600;">${peerUser.name}</span>
+          <span class="avatar-name" style="font-size:0.95rem; font-weight:600;">${name}</span>
+          <span class="avatar-id-badge" style="font-size:0.75rem; color:#94a3b8; font-family:monospace;">ID: ${userIdDisplay}</span>
         </div>
         <div class="screen-share-badge" style="display:none;">🖥️ Presenting Screen</div>
+        <div class="connection-status-tag">
+          <span class="status-pill connecting">Connecting...</span>
+        </div>
         <div class="video-meta">
           <div class="user-name-badge">
-            <span>${peerUser.name}</span>
+            <span class="peer-name">${name}</span>
+            <span class="user-id-tag">ID: ${userIdDisplay}</span>
           </div>
           <div class="mic-badge">🎤</div>
         </div>
       `;
       videoGrid.appendChild(card);
       this.updateGridLayout();
+    } else {
+      // Update names and IDs if card already existed
+      const nameEl = card.querySelector('.peer-name');
+      if (nameEl) nameEl.textContent = name;
+      const idTag = card.querySelector('.user-id-tag');
+      if (idTag) idTag.textContent = `ID: ${userIdDisplay}`;
+      const avatarName = card.querySelector('.avatar-name');
+      if (avatarName) avatarName.textContent = name;
+      const avatarId = card.querySelector('.avatar-id-badge');
+      if (avatarId) avatarId.textContent = `ID: ${userIdDisplay}`;
     }
+  }
+
+  // Attach Remote Media Stream to Video Element and Play Audio
+  attachRemoteStream(peerSocketId, stream) {
+    this.renderRemoteVideoCard(peerSocketId);
+
+    const card = document.getElementById(`video-card-${peerSocketId}`);
+    if (!card) return;
 
     const videoEl = card.querySelector('video');
-    if (videoEl && videoEl.srcObject !== stream) {
-      videoEl.srcObject = stream;
+    if (videoEl) {
+      if (videoEl.srcObject !== stream) {
+        videoEl.srcObject = stream;
+        videoEl.muted = false; // UNMUTED so other participant's voice is heard!
+        videoEl.volume = 1.0;
+      }
+      videoEl.play().catch((err) => {
+        console.warn('Autoplay waiting for user interaction:', err);
+      });
     }
+
+    const statusPill = card.querySelector('.status-pill');
+    if (statusPill) {
+      statusPill.textContent = 'Live 🟢';
+      statusPill.className = 'status-pill connected';
+    }
+  }
+
+  // Shorten ID for clean display: e.g. user_1731912345_abc -> abc or first 8 chars
+  shortId(id) {
+    if (!id) return '';
+    const parts = String(id).split('_');
+    if (parts.length > 2) {
+      return parts[parts.length - 1];
+    }
+    return String(id).substring(0, 8);
   }
 
   // 5. Remove Peer
@@ -232,6 +447,8 @@ class WebRTCManager {
       delete this.peerConnections[peerSocketId];
     }
     delete this.peerProfiles[peerSocketId];
+    delete this.iceQueues[peerSocketId];
+    delete this.remoteStreams[peerSocketId];
 
     const card = document.getElementById(`video-card-${peerSocketId}`);
     if (card) {
@@ -353,7 +570,7 @@ class WebRTCManager {
       this.screenStream = null;
     }
 
-    // Revert back to local webcam video track
+    // Revert back to local webcam/canvas video track
     const camTrack = this.localStream ? this.localStream.getVideoTracks()[0] : null;
 
     for (const socketId in this.peerConnections) {
@@ -419,5 +636,7 @@ class WebRTCManager {
       this.peerConnections[id].close();
     }
     this.peerConnections = {};
+    this.iceQueues = {};
+    this.remoteStreams = {};
   }
 }

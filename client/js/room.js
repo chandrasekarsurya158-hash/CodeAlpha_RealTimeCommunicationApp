@@ -31,12 +31,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  // Display Room ID on Header
+  function shortId(id) {
+    if (!id) return '';
+    const parts = String(id).split('_');
+    if (parts.length > 2) {
+      return parts[parts.length - 1];
+    }
+    return String(id).substring(0, 8);
+  }
+
+  const myShortId = shortId(currentUser.id);
+
+  // Display Room ID and My User ID on Header
   const roomIdDisplay = document.getElementById('roomIdDisplay');
   if (roomIdDisplay) roomIdDisplay.textContent = roomId;
 
+  const myIdDisplay = document.getElementById('myIdDisplay');
+  if (myIdDisplay) myIdDisplay.textContent = myShortId;
+
   const localUserNameTag = document.getElementById('localUserNameTag');
   if (localUserNameTag) localUserNameTag.textContent = `${currentUser.name} (You)`;
+
+  const localUserIdTag = document.getElementById('localUserIdTag');
+  if (localUserIdTag) localUserIdTag.textContent = `ID: ${myShortId}`;
 
   const localAvatarInitial = document.getElementById('localAvatarInitial');
   if (localAvatarInitial) localAvatarInitial.textContent = currentUser.name.charAt(0).toUpperCase();
@@ -82,7 +99,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       selfItem.innerHTML = `
         <div class="part-info">
           <div class="part-avatar">${currentUser.name.charAt(0).toUpperCase()}</div>
-          <div class="part-name">${currentUser.name} (You)</div>
+          <div>
+            <div class="part-name">${currentUser.name} (You)</div>
+            <div class="part-id-sub">ID: ${myShortId}</div>
+          </div>
         </div>
         <div class="part-badges">
           <span class="badge badge-primary">Host</span>
@@ -93,12 +113,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Add other peers
       for (const socketId in peerProfiles) {
         const peer = peerProfiles[socketId];
+        const peerShortId = shortId(peer.id || socketId);
         const peerItem = document.createElement('div');
         peerItem.className = 'participant-item';
         peerItem.innerHTML = `
           <div class="part-info">
             <div class="part-avatar" style="background:#8b5cf6;">${peer.name.charAt(0).toUpperCase()}</div>
-            <div class="part-name">${peer.name}</div>
+            <div>
+              <div class="part-name">${peer.name}</div>
+              <div class="part-id-sub">ID: ${peerShortId}</div>
+            </div>
           </div>
           <div class="part-badges">
             <span class="badge badge-success">Participant</span>

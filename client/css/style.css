@@ -590,7 +590,49 @@ input:focus, select:focus, textarea:focus {
   font-weight: 500;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+
+.user-id-tag {
+  font-size: 0.72rem;
+  font-family: monospace;
+  background: rgba(255, 255, 255, 0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #93c5fd;
+  font-weight: 600;
+}
+
+.connection-status-tag {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 4;
+}
+
+.status-pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  backdrop-filter: blur(8px);
+}
+
+.status-pill.connecting {
+  background: rgba(245, 158, 11, 0.85);
+  color: white;
+}
+
+.status-pill.connected {
+  background: rgba(16, 185, 129, 0.85);
+  color: white;
+}
+
+.part-id-sub {
+  font-size: 0.72rem;
+  font-family: monospace;
+  color: #94a3b8;
+  margin-top: 1px;
 }
 
 .mic-badge {
