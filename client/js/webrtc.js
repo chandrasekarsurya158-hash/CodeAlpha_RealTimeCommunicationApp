@@ -1,4 +1,4 @@
-// WebRTC Peer-to-Peer Mesh Manager with Open-Relay TURN Fallback & Robust Audio/Video
+// WebRTC Peer-to-Peer Mesh Manager with Open-Relay TURN Fallback, Robust Screen Share & Audio Engine
 class WebRTCManager {
   constructor({ socket, roomId, currentUser, onParticipantChange }) {
     this.socket = socket;
@@ -17,7 +17,7 @@ class WebRTCManager {
     this.isVideoOff = false;
     this.isScreenSharing = false;
 
-    // Public STUN and Open-Relay TURN configuration for cloud deployments (Render, AWS, Heroku)
+    // Public STUN & Free Open-Relay TURN configuration for cloud deployments (Render, Heroku, AWS)
     this.rtcConfig = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -53,54 +53,59 @@ class WebRTCManager {
   // Set up autoplay audio/video unlock listener
   setupAutoplayUnlock() {
     const unlock = () => {
-      const mediaElements = document.querySelectorAll('.video-card:not(.local) video, .remote-audio-track');
+      const banner = document.getElementById('audioUnlockBanner');
+      if (banner) banner.style.display = 'none';
+
+      const mediaElements = document.querySelectorAll('video, audio');
       mediaElements.forEach((m) => {
-        if (m.paused) {
+        if (m.paused && m.id !== 'previewVideo') {
           m.play().catch(() => {});
         }
       });
     };
-    document.addEventListener('click', unlock, { once: false });
-    document.addEventListener('touchstart', unlock, { once: false });
-    document.addEventListener('keydown', unlock, { once: false });
+
+    document.addEventListener('click', unlock, { passive: true });
+    document.addEventListener('touchstart', unlock, { passive: true });
+    document.addEventListener('keydown', unlock, { passive: true });
+
+    const banner = document.getElementById('audioUnlockBanner');
+    if (banner) {
+      banner.addEventListener('click', unlock);
+    }
   }
 
-  // 1. Initialize Local Media Stream with Hardware Conflict Fallbacks
+  // 1. Initialize Local Media Stream with Multi-Tier Fallbacks (Resolves Laptop Camera/Mic Conflicts)
   async initLocalStream() {
+    // Tier 1: Relaxed video + audio
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: { echoCancellation: true, noiseSuppression: true }
+        video: true,
+        audio: true
       });
-
-      const localCard = document.getElementById('localVideoCard');
-      if (localCard) {
-        localCard.classList.add('has-video');
-        localCard.classList.remove('video-off');
-      }
     } catch (err1) {
-      console.warn('Direct camera+mic access failed, attempting audio only...', err1);
+      console.warn('Standard video+audio failed, trying video only...', err1);
+      // Tier 2: Video only (mic unavailable or in use by another app like WhatsApp Web)
       try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const canvasVideoTrack = this.createCanvasVideoTrack(this.currentUser.name);
-        this.localStream = new MediaStream([
-          ...audioStream.getAudioTracks(),
-          canvasVideoTrack
-        ]);
-
-        const localCard = document.getElementById('localVideoCard');
-        if (localCard) {
-          localCard.classList.add('has-video');
-        }
+        const vidStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const silentAudio = this.createSilentAudioTrack();
+        this.localStream = new MediaStream([...vidStream.getVideoTracks(), silentAudio]);
       } catch (err2) {
-        console.warn('Audio access also failed, using synthetic media stream fallback...', err2);
-        const canvasVideoTrack = this.createCanvasVideoTrack(this.currentUser.name);
-        const silentAudioTrack = this.createSilentAudioTrack();
-        this.localStream = new MediaStream([canvasVideoTrack, silentAudioTrack]);
+        console.warn('Video failed, trying audio only...', err2);
+        // Tier 3: Audio only (webcam in use by another tab or laptop driver issue)
+        try {
+          const audStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const canvasVideo = this.createCanvasVideoTrack(this.currentUser.name);
+          this.localStream = new MediaStream([...audStream.getAudioTracks(), canvasVideo]);
+        } catch (err3) {
+          // Tier 4: Synthetic video & audio (permissions denied)
+          console.warn('All hardware access denied, using synthetic stream...', err3);
+          const canvasVideo = this.createCanvasVideoTrack(this.currentUser.name);
+          const silentAudio = this.createSilentAudioTrack();
+          this.localStream = new MediaStream([canvasVideo, silentAudio]);
 
-        const localCard = document.getElementById('localVideoCard');
-        if (localCard) {
-          localCard.classList.add('has-video');
+          if (window.showToast) {
+            window.showToast('Camera/Mic blocked. Please allow permissions in browser address bar (🔒 icon).', 6000);
+          }
         }
       }
     }
@@ -108,8 +113,14 @@ class WebRTCManager {
     const localVideo = document.getElementById('localVideo');
     if (localVideo) {
       localVideo.srcObject = this.localStream;
-      localVideo.muted = true; // Always mute local video to prevent audio feedback
+      localVideo.muted = true; // Always mute self to avoid echo
       localVideo.play().catch(() => {});
+    }
+
+    const localCard = document.getElementById('localVideoCard');
+    if (localCard) {
+      localCard.classList.add('has-video');
+      localCard.classList.remove('video-off');
     }
 
     return this.localStream;
@@ -178,18 +189,15 @@ class WebRTCManager {
 
   // 2. Set up Socket Signaling Listeners
   setupSignaling() {
-    // When we join, server returns all existing users in the room
     this.socket.on('all-users', async ({ users }) => {
       for (const peer of users) {
         this.peerProfiles[peer.socketId] = peer.user;
         this.renderRemoteVideoCard(peer.socketId, peer.user);
-        // Create an offer to each existing peer
         await this.createPeerConnection(peer.socketId, true);
       }
       this.updateParticipantCount();
     });
 
-    // When another user joins after us
     this.socket.on('user-joined', async ({ socketId, user }) => {
       this.peerProfiles[socketId] = user;
       this.renderRemoteVideoCard(socketId, user);
@@ -200,7 +208,6 @@ class WebRTCManager {
       }
     });
 
-    // Relay for SDP Offers, Answers, and ICE candidates
     this.socket.on('signal', async ({ from, signalData, user }) => {
       if (user) {
         this.peerProfiles[from] = user;
@@ -217,7 +224,7 @@ class WebRTCManager {
           const desc = new RTCSessionDescription(signalData.sdp);
           await pc.setRemoteDescription(desc);
 
-          // Flush any queued ICE candidates safely
+          // Flush queued candidates
           if (this.iceQueues[from] && this.iceQueues[from].length > 0) {
             const queue = [...this.iceQueues[from]];
             this.iceQueues[from] = [];
@@ -267,11 +274,25 @@ class WebRTCManager {
     this.socket.on('peer-media-state', ({ socketId, isAudioMuted, isVideoOff, isScreenSharing }) => {
       const card = document.getElementById(`video-card-${socketId}`);
       if (card) {
-        card.classList.toggle('video-off', isVideoOff);
-        if (isVideoOff) {
+        const videoEl = card.querySelector('video');
+
+        if (isScreenSharing) {
+          card.classList.add('has-video');
+          card.classList.remove('video-off');
+          if (videoEl) {
+            videoEl.classList.add('screen-sharing');
+            videoEl.play().catch(() => {});
+          }
+        } else if (isVideoOff) {
           card.classList.remove('has-video');
+          card.classList.add('video-off');
         } else {
           card.classList.add('has-video');
+          card.classList.remove('video-off');
+          if (videoEl) {
+            videoEl.classList.remove('screen-sharing');
+            videoEl.play().catch(() => {});
+          }
         }
 
         const micBadge = card.querySelector('.mic-badge');
@@ -287,7 +308,6 @@ class WebRTCManager {
       }
     });
 
-    // Peer left
     this.socket.on('user-left', ({ socketId, user }) => {
       this.removePeer(socketId);
       const name = user ? user.name : 'A participant';
@@ -341,7 +361,17 @@ class WebRTCManager {
       this.attachRemoteStream(peerSocketId, remoteStream);
     };
 
-    // Track connection state
+    // Monitor ICE connection state & trigger automatic ICE restart if network changes
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') {
+        console.warn(`[ICE] Failed for ${peerSocketId}, attempting automatic restart...`);
+        try {
+          pc.restartIce();
+        } catch {}
+      }
+    };
+
+    // Track overall connection state
     pc.onconnectionstatechange = () => {
       const statusPill = document.querySelector(`#video-card-${peerSocketId} .status-pill`);
       if (statusPill) {
@@ -394,7 +424,7 @@ class WebRTCManager {
     if (!card) {
       card = document.createElement('div');
       card.id = `video-card-${peerSocketId}`;
-      card.className = 'video-card'; // Starts with avatar showing by default
+      card.className = 'video-card'; // Starts with avatar showing by default until frames arrive
 
       card.innerHTML = `
         <video id="video-${peerSocketId}" autoplay playsinline></video>
@@ -429,28 +459,32 @@ class WebRTCManager {
     }
   }
 
-  // Attach Remote Media Stream to Video & Audio Elements
+  // Attach Remote Media Stream to Video & Dedicated Audio Elements
   attachRemoteStream(peerSocketId, stream) {
     this.renderRemoteVideoCard(peerSocketId);
 
     const card = document.getElementById(`video-card-${peerSocketId}`);
     if (!card) return;
 
-    // Dedicated unmuted audio element to guarantee voice is heard across all browsers
-    let audioEl = card.querySelector('audio.remote-audio-track');
+    // Dedicated unmuted audio element in global container (guarantees voice plays on mobile & desktop)
+    let audioEl = document.getElementById(`audio-${peerSocketId}`);
     if (!audioEl) {
       audioEl = document.createElement('audio');
-      audioEl.className = 'remote-audio-track';
+      audioEl.id = `audio-${peerSocketId}`;
       audioEl.autoplay = true;
       audioEl.playsInline = true;
-      audioEl.style.display = 'none';
-      card.appendChild(audioEl);
+      const container = document.getElementById('remoteAudioContainer') || document.body;
+      container.appendChild(audioEl);
     }
     if (audioEl.srcObject !== stream) {
       audioEl.srcObject = stream;
       audioEl.muted = false;
       audioEl.volume = 1.0;
-      audioEl.play().catch(() => {});
+      audioEl.play().catch((err) => {
+        console.warn('Audio play restricted until user gesture:', err);
+        const banner = document.getElementById('audioUnlockBanner');
+        if (banner) banner.style.display = 'flex';
+      });
     }
 
     const videoEl = card.querySelector('video');
@@ -471,7 +505,7 @@ class WebRTCManager {
       };
 
       videoEl.play().catch((err) => {
-        console.warn('Autoplay waiting for user interaction:', err);
+        console.warn('Video play waiting for interaction:', err);
       });
     }
 
@@ -501,6 +535,9 @@ class WebRTCManager {
     delete this.peerProfiles[peerSocketId];
     delete this.iceQueues[peerSocketId];
     delete this.remoteStreams[peerSocketId];
+
+    const audioEl = document.getElementById(`audio-${peerSocketId}`);
+    if (audioEl) audioEl.remove();
 
     const card = document.getElementById(`video-card-${peerSocketId}`);
     if (card) {
@@ -572,9 +609,21 @@ class WebRTCManager {
         // Replace track on all active peer connections
         for (const socketId in this.peerConnections) {
           const pc = this.peerConnections[socketId];
-          const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+          let sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+
+          if (!sender) {
+            const transceiver = pc.getTransceivers().find(
+              (t) => t.sender && ((t.sender.track && t.sender.track.kind === 'video') || (t.receiver && t.receiver.track && t.receiver.track.kind === 'video'))
+            );
+            if (transceiver && transceiver.sender) {
+              sender = transceiver.sender;
+            }
+          }
+
           if (sender) {
             await sender.replaceTrack(screenTrack);
+          } else {
+            pc.addTrack(screenTrack, this.screenStream);
           }
         }
 
@@ -582,6 +631,7 @@ class WebRTCManager {
         if (localVideo) {
           localVideo.srcObject = this.screenStream;
           localVideo.classList.add('screen-sharing');
+          localVideo.play().catch(() => {});
         }
 
         const localCard = document.getElementById('localVideoCard');
@@ -604,7 +654,7 @@ class WebRTCManager {
         this.socket.emit('media-state-changed', {
           roomId: this.roomId,
           isAudioMuted: this.isAudioMuted,
-          isVideoOff: this.isVideoOff,
+          isVideoOff: false,
           isScreenSharing: true
         });
 
@@ -631,7 +681,7 @@ class WebRTCManager {
 
     for (const socketId in this.peerConnections) {
       const pc = this.peerConnections[socketId];
-      const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+      let sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
       if (sender && camTrack) {
         await sender.replaceTrack(camTrack);
       }
@@ -641,6 +691,18 @@ class WebRTCManager {
     if (localVideo && this.localStream) {
       localVideo.srcObject = this.localStream;
       localVideo.classList.remove('screen-sharing');
+      localVideo.play().catch(() => {});
+    }
+
+    const localCard = document.getElementById('localVideoCard');
+    if (localCard) {
+      if (this.isVideoOff) {
+        localCard.classList.remove('has-video');
+        localCard.classList.add('video-off');
+      } else {
+        localCard.classList.add('has-video');
+        localCard.classList.remove('video-off');
+      }
     }
 
     const localScreenBadge = document.getElementById('localScreenBadge');

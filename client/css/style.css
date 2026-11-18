@@ -523,22 +523,41 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent-success);
 }
 
+/* 1. Default state: Video element is hidden until active video is received */
 .video-card video {
   width: 100%;
   height: 100%;
   object-fit: cover;
   background: #000;
-  display: none; /* Hide video element until real stream frames arrive */
+  display: none;
 }
 
+/* 2. Default state: Avatar fallback is visible */
+.video-card .avatar-fallback {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: #1e293b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 2;
+}
+
+/* 3. When the card has active video or screen share: Show video, hide avatar */
 .video-card.has-video video {
-  display: block; /* Show video when frames are playing */
+  display: block !important;
 }
 
 .video-card.has-video .avatar-fallback {
-  display: none; /* Hide avatar when video is actively showing */
+  display: none !important;
 }
 
+/* 4. When camera is turned off: Force video hidden, force avatar visible */
 .video-card.video-off video {
   display: none !important;
 }
@@ -547,24 +566,15 @@ input:focus, select:focus, textarea:focus {
   display: flex !important;
 }
 
+/* 5. Mirror local camera video (do NOT mirror when screen sharing) */
 .video-card.local video:not(.screen-sharing) {
   transform: scaleX(-1);
 }
 
-/* Fallback Avatar Placeholder - SHOWN BY DEFAULT */
-.video-card .avatar-fallback {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: #1e293b;
-  display: flex; /* Display avatar by default so no black screen ever shows */
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 12px;
-  z-index: 2;
+.video-card.local video.screen-sharing {
+  transform: none !important;
+  object-fit: contain !important;
+  background: #0b0f19;
 }
 
 .avatar-circle {
